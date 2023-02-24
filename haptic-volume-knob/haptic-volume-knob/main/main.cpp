@@ -38,7 +38,8 @@ TaskHandle_t motor_task_handle = NULL;
 
 void setup_motor()
 {
-	pinMode(27, OUTPUT);
+	//pinMode(27, OUTPUT);
+	gpio_set_direction(GPIO_NUM_27, GPIO_MODE_OUTPUT);
 	
 	// initialise magnetic sensor hardware
 	sensor.init();
@@ -87,8 +88,7 @@ void setup_motor()
 void run_loop()
 {
 	// main FOC algorithm function
-	i++;
-	digitalWrite(27, HIGH);
+	gpio_set_level(GPIO_NUM_27, 1);
 	motor.loopFOC();
 	float cycle_time = 0.0002522;
 	float angle_rad = sensor.getAngle();
@@ -112,20 +112,13 @@ void run_loop()
 			total_current = 1.0;
 		}
 		motor.move(total_current);
-	}
-
-	if (i % 100 == 0  && false)
-	{
-		String toprint = String(spring_current) + "\t" + String(damper_current) + "\t" + String(velocity) + "\t" + String(angle) + "\n";
-		Serial.print(toprint);
-	}
-  
+	}  
   
 	//motor.monitor();
 
 	// user communication
 	command.run();
-	digitalWrite(27, LOW);
+	gpio_set_level(GPIO_NUM_27, 0);
 }
 
 void motor_task(void* arg)
@@ -139,6 +132,7 @@ void motor_task(void* arg)
 
 extern "C" void app_main(void)
 {
+	disableCore1WDT();
 	xTaskCreatePinnedToCore(motor_task, "Motor Task", 4096, NULL, configMAX_PRIORITIES - 1, &motor_task_handle, 1);
 	while (true)
 	{
