@@ -4,3 +4,6 @@
 
 .visualgdb/
 build/
+
+bin/
+obj/
