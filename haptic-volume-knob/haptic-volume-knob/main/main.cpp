@@ -79,15 +79,18 @@ void run_loop_detent()
 	float angle = angle_rad * (180 / PI);
 	float spring_current = 0;
 	float total_current = 0;
+	
+	float threshold = detent_width / 2;
+	float angle_noise_threshold = 0.3;
 
 	if (angle > 0)
 	{
 		float phase = fmod(angle, detent_width);
-		if (phase < detent_width / 2)
-		{
+		if (phase < threshold)
+		{		
 			if (last_current < 0)
 			{
-				if (abs(phase - detent_width / 2) > 0.1)
+				if (abs(phase - threshold) > angle_noise_threshold)
 				{
 					spring_current = phase * (ma_per_degree / 1000.0);
 				}
@@ -105,10 +108,10 @@ void run_loop_detent()
 		{
 			if (last_current > 0)
 			{
-				if ((abs(phase - detent_width / 2)) > 0.1)
+				if ((abs(phase - threshold)) > angle_noise_threshold)
 				{
-					float phase2 = fmod(phase, detent_width / 2);
-					spring_current = (detent_width / 2 - phase2) * (ma_per_degree / 1000.0) * -1;
+					float phase2 = fmod(phase, threshold);
+					spring_current = (threshold - phase2) * (ma_per_degree / 1000.0) * -1;
 				}
 				else
 				{
@@ -117,8 +120,50 @@ void run_loop_detent()
 			}
 			else
 			{
-				float phase2 = fmod(phase, detent_width / 2);
-				spring_current = (detent_width / 2 - phase2) * (ma_per_degree / 1000.0) * -1;
+				float phase2 = fmod(phase, threshold);
+				spring_current = (threshold - phase2) * (ma_per_degree / 1000.0) * -1;
+			}
+		}
+	}
+	else
+	{
+		float phase = fmod(angle, detent_width);
+		if (phase > -threshold)
+		{
+			if (last_current > 0)
+			{
+				if (abs(phase - -threshold) > angle_noise_threshold)
+				{
+					spring_current = phase * (ma_per_degree / 1000.0);
+				}
+				else
+				{
+					spring_current = last_current;
+				}
+			}
+			else
+			{
+				spring_current = phase * (ma_per_degree / 1000.0);
+			}
+		}
+		else
+		{
+			if (last_current < 0)
+			{
+				if ((abs(phase - -threshold)) > angle_noise_threshold)
+				{
+					float phase2 = fmod(phase, threshold);
+					spring_current = (threshold + phase2) * (ma_per_degree / 1000.0);
+				}
+				else
+				{
+					spring_current = last_current;
+				}
+			}
+			else
+			{
+				float phase2 = fmod(phase, threshold);
+				spring_current = (threshold + phase2) * (ma_per_degree / 1000.0);
 			}
 		}
 	}
