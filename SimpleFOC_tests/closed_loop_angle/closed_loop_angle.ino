@@ -2,17 +2,17 @@
 
 #define A_h 17 
 #define A_l 16
-#define B_h 26
-#define B_l 25
-#define C_h 22
-#define C_l 21
+#define B_h 35
+#define B_l 36
+#define C_h 6
+#define C_l 5
 
 // BLDC motor & driver instance
 BLDCMotor motor = BLDCMotor(7);
 BLDCDriver6PWM driver = BLDCDriver6PWM(A_h, A_l, B_h, B_l, C_h, C_l);
 
 // magnetic sensor instance - SPI
-MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 10);
 
 float target_angle = 1;
 

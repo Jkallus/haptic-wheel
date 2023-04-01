@@ -73,7 +73,7 @@
         </IDFCheckout>
         <SuppressTestPrerequisiteChecks>false</SuppressTestPrerequisiteChecks>
         <UseCCache>false</UseCCache>
-        <DeviceID>ESP32</DeviceID>
+        <DeviceID>ESP32S3</DeviceID>
       </ESPIDFExtension>
     </ProjectModeSettings>
   </Build>
@@ -160,7 +160,7 @@
       <InterfaceID>jlink</InterfaceID>
       <InterfaceSerialNumber>000261001869</InterfaceSerialNumber>
       <Configuration xsi:type="com.visualgdb.edp.openocd.settings.esp32">
-        <CommandLine>-f interface/jlink.cfg -c "adapter_khz 14999" -f target/esp32.cfg</CommandLine>
+        <CommandLine>-f interface/jlink.cfg -c "adapter_khz 3000" -f target/esp32s3.cfg</CommandLine>
         <ExtraParameters>
           <Frequency xsi:nil="true" />
           <BoostedFrequency xsi:nil="true" />

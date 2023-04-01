@@ -2,10 +2,10 @@
 
 #define A_h 17 
 #define A_l 16
-#define B_h 26
-#define B_l 25
-#define C_h 22
-#define C_l 21
+#define B_h 35
+#define B_l 36
+#define C_h 6
+#define C_l 5
 
 const float pi = 3.141592;
 
@@ -14,7 +14,7 @@ BLDCMotor motor = BLDCMotor(7);
 BLDCDriver6PWM driver = BLDCDriver6PWM(A_h, A_l, B_h, B_l, C_h, C_l);
 
 // magnetic sensor instance - SPI
-MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 10);
 
 float ma_per_degree = 10;
 // instantiate the commander
@@ -23,7 +23,7 @@ void doTarget(char* cmd) { command.scalar(&ma_per_degree, cmd); }
 void doMotor(char* cmd) { command.motor(&motor, cmd); }
 void setup() { 
   
-  pinMode(27, OUTPUT);
+  pinMode(20, OUTPUT);
 
   // initialise magnetic sensor hardware
   sensor.init();
@@ -74,7 +74,7 @@ int i = 0;
 void loop() {
   // main FOC algorithm function
   i++;
-  digitalWrite(27, HIGH);
+  digitalWrite(20, HIGH);
   motor.loopFOC();
   float cycle_time = 0.0002522;
   float angle_rad = sensor.getAngle();
@@ -111,5 +111,5 @@ void loop() {
 
   // user communication
   command.run();
-  digitalWrite(27, LOW);
+  digitalWrite(20, LOW);
 }

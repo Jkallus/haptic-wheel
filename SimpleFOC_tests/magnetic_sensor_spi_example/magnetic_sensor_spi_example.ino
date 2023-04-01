@@ -4,7 +4,7 @@
 //  config  - SPI config
 //  cs      - SPI chip select pin 
 // magnetic sensor instance - SPI
-MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 5);
+MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 10);
 // alternative constructor (chipselsect, bit_resolution, angle_read_register, )
 // MagneticSensorSPI sensor = MagneticSensorSPI(10, 14, 0x3FFF);
 

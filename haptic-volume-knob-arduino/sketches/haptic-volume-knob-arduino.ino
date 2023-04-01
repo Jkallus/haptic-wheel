@@ -1,31 +1,7 @@
-#include <stdio.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include "esp32-hal.h"
-#include "Arduino.h"
-
-#include <SimpleFOC.h>
-#include  <hal/wdt_hal.h>
-#include <esp_task_wdt.h>
-
 #include "USB.h"
 #include "USBHID.h"
-
-
-#define A_h 17 
-#define A_l 16
-#define B_h 35
-#define B_l 36
-#define C_h 6
-#define C_l 5
-
-
-// BLDC motor & driver instance
-BLDCMotor motor = BLDCMotor(7);
-BLDCDriver6PWM driver = BLDCDriver6PWM(A_h, A_l, B_h, B_l, C_h, C_l);
-
+#include <SimpleFOC.h>
+#include <Adafruit_NeoPixel.h>
 USBHID HID;
 
 static const uint8_t report_descriptor[] = { // 8 axis
@@ -52,8 +28,17 @@ static const uint8_t report_descriptor[] = { // 8 axis
     0xC0,          // EndCollection()
 };
 
-QueueHandle_t cmdQueueHandle = NULL;
-TaskHandle_t queue_task_handle = NULL;
+#define A_h 17 
+#define A_l 16
+#define B_h 35
+#define B_l 36
+#define C_h 6
+#define C_l 5
+
+#define LED_PIN 9
+#define LED_COUNT 24
+
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 class CustomHIDDevice : public USBHIDDevice {
 public:
@@ -89,6 +74,8 @@ public:
 	{
 		uint8_t data[1];
 		data[0] = 0x01;
+		HID.SendReport(1, data, 1);
+		data[0] = 0x00;
 		return HID.SendReport(1, data, 1);
 	}
 	
@@ -96,6 +83,8 @@ public:
 	{
 		uint8_t data[1];
 		data[0] = 0x02;
+		HID.SendReport(1, data, 1);
+		data[0] = 0x00;
 		return HID.SendReport(1, data, 1);
 	}
 
@@ -104,29 +93,47 @@ public:
 	}
 };
 
+QueueHandle_t cmdQueueHandle = NULL;
+QueueHandle_t percentQueueHandle = NULL;
+QueueHandle_t count_queue_handle = NULL;
+TaskHandle_t led_task_handle = NULL;
+TaskHandle_t queue_task_handle = NULL;
+TaskHandle_t count_task_handle = NULL;
+
 CustomHIDDevice Device;
+
+// BLDC motor & driver instance
+BLDCMotor motor = BLDCMotor(7);
+BLDCDriver6PWM driver = BLDCDriver6PWM(A_h, A_l, B_h, B_l, C_h, C_l);
 
 // magnetic sensor instance - SPI
 MagneticSensorSPI sensor = MagneticSensorSPI(AS5048_SPI, 10);
 
-float ma_per_degree = 10; // K constant
-float detent_width = 20; // Width between detents in angles
+
+constexpr int detents_per_revolution = 50; // doesn't work reliably after 50
+constexpr float detent_width = 360.0f / detents_per_revolution;
+constexpr float detent_max_ma = 600;
+constexpr float ma_per_degree = detent_max_ma / detent_width;
+
+
+//float ma_per_degree = 45; // K constant
+//float detent_width = 7.2; // Width between detents in angles
 float last_current = 0.0;
 float last_angle = 0.0;
 int count = 0;
 int i = 0;
 
 Commander command = Commander(Serial); // instantiate the commander
-void doTarget(char* cmd) { command.scalar(&ma_per_degree, cmd); }
-void doWidth(char* cmd) {command.scalar(&detent_width, cmd); }
-void doMotor(char* cmd) { command.motor(&motor, cmd); }
+//void doTarget(char* cmd) { command.scalar(&ma_per_degree, cmd); }
+//void doWidth(char* cmd) {command.scalar(&detent_width, cmd); }
+//void doMotor(char* cmd) { command.motor(&motor, cmd); }
 TaskHandle_t motor_task_handle = NULL;
 
 void setup_motor()
 {
-	gpio_set_direction(GPIO_NUM_20, GPIO_MODE_OUTPUT);
+	pinMode(20, OUTPUT);
 	sensor.init(); // initialise magnetic sensor hardware
-	motor.linkSensor(&sensor); 	// link the motor to the sensor
+	motor.linkSensor(&sensor); // link the motor to the sensor
 
 	// driver config
 	driver.voltage_power_supply = 10; // power supply voltage [V]
@@ -140,31 +147,154 @@ void setup_motor()
 	motor.controller = MotionControlType::torque; // set motion control loop to be used
 	
 	Serial.begin(115200); // use monitoring with serial 
-	//motor.useMonitoring(Serial);
-	//motor.monitor_variables = _MON_ANGLE | _MON_VEL;
 	
 	motor.init();
 	motor.initFOC(); // align sensor and start FOC
 
-	command.add('T', doTarget, "K Constant"); // - if phase resistance defined
-	command.add('M', doMotor, "motor");
-	command.add('W', doWidth, "Detent Width");
+	//command.add('T', doTarget, "K Constant"); // - if phase resistance defined
+	//command.add('M', doMotor, "motor");
+	//command.add('W', doWidth, "Detent Width");
 
 	Serial.println(F("Motor ready."));
 	Serial.println(F("Set the target using serial terminal:"));
-	_delay(1000);
+	vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-void run_loop_detent()
-{	i++;
-	// main FOC algorithm function
-	if (i % 1000 == 0)
+
+//void queue_task(void* arg)
+//{
+//	bool recv;
+//	while (1)
+//	{
+//		if (xQueueReceive(cmdQueueHandle, &recv, TickType_t(5)))
+//		{
+//			if (recv)
+//				Device.increment();
+//			else
+//				Device.decrement();
+//			
+//			Serial.println("Sending update: " + String(recv));
+//		}
+//		vTaskDelay(10);
+//	}
+//}
+
+void count_update_task(void* arg)
+{
+	int recv_count;
+	while (1)
 	{
-		gpio_set_level(GPIO_NUM_20, 1);			
+		if(xQueueReceive(count_queue_handle, &recv_count, (TickType_t)5))
+		{
+			uint32_t count_constrained = constrain(recv_count, 0, detents_per_revolution);
+			float levels_per_led = (float)detents_per_revolution / (float)LED_COUNT;
+			int fully_lit_count = (int)(count_constrained / levels_per_led);
+			float remainder = fmod(count_constrained, levels_per_led);
+			float last_led_percentage = remainder / levels_per_led;
+			set_strip(fully_lit_count, last_led_percentage);
+		}
+	}
+}
+
+void set_strip(int fully_lit, float last_percent)
+{
+	String msg = "Setting " + String(fully_lit) + " fully lit LEDs";
+	Serial.println(msg);
+	msg = "Last LED percent: " + String(last_percent, 2);
+	Serial.println(msg);
+	
+	strip.clear();
+	for (int j = 0; j < fully_lit; j++)
+	{
+		strip.setPixelColor(j, 0, 255, 0);
 	}
 	
+	if (last_percent > 0.001 && fully_lit < LED_COUNT) 
+	{
+		int brightness = (int)(last_percent * 255);
+		int last_led_idx = fully_lit; 
+		strip.setPixelColor(last_led_idx, 0, brightness, 0);
+	}
+	
+	strip.show();
+}
+
+//void set_strip(int percent)
+//{
+//	strip.clear();
+//	int num_green = round((float(percent) / 100.0f) * 24);
+//	Serial.println("Setting " + String(num_green) + "LEDs green");
+//	for (int i = 0; i < num_green; i++)
+//	{
+//		strip.setPixelColor(i, 0, 150, 0);	
+//	}
+//	strip.show();
+//}
+
+void set_strip_single_color(uint8_t red, uint8_t green, uint8_t blue)
+{
+	for (int i = 0; i < LED_COUNT; i++)
+	{
+		strip.setPixelColor(i, red, green, blue);
+	}
+	strip.show();
+}
+
+//void led_task(void* arg)
+//{
+//	uint8_t buffer;
+//	while (1)
+//	{
+//		if(xQueueReceive(percentQueueHandle, &buffer, (TickType_t)10))
+//		{
+//			uint8_t test_int = buffer;
+//			//Serial.println("Percentage: " + String(buffer));
+//			set_strip(test_int);
+//		}
+//		vTaskDelay(10);
+//	}
+//	while (1)
+//	{
+//		strip.clear();
+//		for (int i = 0; i < strip.numPixels(); i++)
+//		{
+//			strip.setPixelColor(i, 0, 0, 50);
+//			strip.show();
+//		}
+//		
+//	}
+//}
+
+
+void setup()
+{
+	strip.begin();
+	strip.show();
+	strip.clear();
+	strip.setBrightness(35);
+	set_strip_single_color(50, 0, 0);
+	Device.begin();
+	USB.begin();
+	
+	
+	//cmdQueueHandle = xQueueCreate(5, sizeof(bool));
+	//percentQueueHandle = xQueueCreate(5, sizeof(uint8_t));
+	count_queue_handle = xQueueCreate(5, sizeof(int));
+	
+	//xTaskCreate(queue_task, "Queue Task", 2048, NULL, configMAX_PRIORITIES - 5, &queue_task_handle);
+	//xTaskCreate(led_task, "LED Task", 2048, NULL, configMAX_PRIORITIES - 7, &led_task_handle);
+	xTaskCreate(count_update_task, "Count Task", 2048, NULL, configMAX_PRIORITIES - 5, &count_task_handle);
+	
+	setup_motor();
+	pinMode(LED_BUILTIN, OUTPUT);
+	set_strip_single_color(0, 0, 50);
+}
+
+void loop()
+{
+	digitalWrite(20, HIGH);
 	motor.loopFOC();
-  
+	
 	float angle_rad = sensor.getAngle();
 	float angle = angle_rad * (180 / PI);
 	float spring_current = 0;
@@ -172,7 +302,7 @@ void run_loop_detent()
 	
 	float threshold = detent_width / 2;
 	float angle_noise_threshold = 0.3;
-
+	
 	if (angle > 0)
 	{
 		float phase = fmod(angle, detent_width);
@@ -258,6 +388,11 @@ void run_loop_detent()
 		}
 	}
 	
+//	if (i++ % 1 == 0)
+//	{
+//		Serial.println(String(spring_current) + "\t" + String(angle));
+//	}
+	
 	total_current = spring_current;
 	
 	if (total_current > 1.0)
@@ -267,69 +402,34 @@ void run_loop_detent()
 	
 	float peak_current_threshold = (ma_per_degree / 1000.0) * (detent_width / 2) * 0.9;
 	bool at_snap_edge = abs(last_current) > peak_current_threshold && abs(total_current) > peak_current_threshold; // check that the transition that may be occuring is at the snap edge and not in the settling point between snaps
+	//bool set_led = false;
 	if (last_current > 0 && total_current < 0 && at_snap_edge) // CCW snap
 	{
-		Serial.println(--count);		
+		Serial.println(--count);
+		//bool change = false;
+		//xQueueSend(cmdQueueHandle, &change, 5);		
+		xQueueSend(count_queue_handle, &count, (TickType_t)5);
+		//set_led = true;
 	}
 	else if(last_current < 0 && total_current > 0 && at_snap_edge) // CW snap
 	{
 		Serial.println(++count);
+		//bool change = true;
+		//xQueueSend(cmdQueueHandle, &change, 5);
+		int temp_int = count;
+		xQueueSend(count_queue_handle, &temp_int, (TickType_t)5);
+		//set_led = true;
 	}
+	
+//	if (set_led)
+//	{
+//		uint8_t count_limited = (uint8_t)constrain(count, 0, 100);
+//		xQueueSend(percentQueueHandle, &count_limited, (TickType_t)5);	
+//	}	
+	
 	last_current = total_current;
 	
 	motor.move(total_current);
 	
-	
-	command.run();
-	if (i % 1000 == 0)
-	{
-		gpio_set_level(GPIO_NUM_20, 0);	
-	}
-	
-}
-
-void motor_task(void* arg)
-{
-	int q = 0;
-	setup_motor();
-	while (1)
-	{
-		run_loop_detent();
-		esp_task_wdt_reset();	
-//		if (q++ % 1000 == 0)
-//		{
-//			esp_task_wdt_reset();	
-//		}
-	}
-}
-
-void queue_task(void* arg)
-{
-	bool recv;
-	while (1)
-	{
-		if(xQueueReceive(cmdQueueHandle, &recv, TickType_t(5)))
-		{
-			if (recv)
-				Device.increment();
-			else
-				Device.decrement();
-		}
-	}
-}
-
-extern "C" void app_main(void)
-{
-	cmdQueueHandle = xQueueCreate(10, sizeof(bool));
-	
-	Device.begin();
-	USB.begin();
-	
-	xTaskCreatePinnedToCore(motor_task, "Motor Task", 4096, NULL, configMAX_PRIORITIES - 1, &motor_task_handle, 1);
-	xTaskCreatePinnedToCore(queue_task, "Queue Task", 1024, NULL, configMAX_PRIORITIES - 2, &queue_task_handle, 0);
-	
-	while (true)
-	{
-		vTaskDelay(1);
-	}
+	digitalWrite(20, LOW);
 }
