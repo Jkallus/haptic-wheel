@@ -2,6 +2,8 @@
 #include "USBHID.h"
 #include <SimpleFOC.h>
 #include <Adafruit_NeoPixel.h>
+#include <Wire.h>
+#include <BH1750.h>
 
 #ifdef LOG_LOCAL_LEVEL
 	#undef LOG_LOCAL_LEVEL
@@ -14,6 +16,8 @@ const char* HID_TAG = "HID";
 const char* MOTOR_TAG = "MOTOR";
 const char* VOLUME_TAG = "VOLUME";
 const char* MAIN_TAG = "MAIN";
+const char* LED_TAG = "LED";
+const char* BUTTON_TAG = "BUTTON";
 static const uint8_t report_descriptor[] = { // 8 axis
     0x05, 0x0C,    // UsagePage(Consumer[12])
     0x09, 0x01,    // UsageId(Consumer Control[1])
@@ -55,9 +59,11 @@ enum class DETENTS_PER_REV
 
 constexpr DETENTS_PER_REV detents_per_revolution = DETENTS_PER_REV::Fifty;
 constexpr float detent_width = 360.0f / (float)detents_per_revolution;
-constexpr float detent_max_ma = 500;
+float detent_max_ma = 500;
+float detent_max_ma_values[] = { 200, 300, 400, 500, 600, 700 };
+SemaphoreHandle_t detent_ma_semaphore = NULL;
 constexpr float virtual_wall_ma_per_degree = 350;
-constexpr float ma_per_degree = detent_max_ma / detent_width;
+float ma_per_degree = detent_max_ma / detent_width;
 
 BLDCMotor motor = BLDCMotor(7);
 BLDCDriver6PWM driver = BLDCDriver6PWM(A_h, A_l, B_h, B_l, C_h, C_l);
@@ -75,6 +81,31 @@ Commander command = Commander(Serial); // instantiate the commander
 QueueHandle_t count_queue_handle = NULL;
 TaskHandle_t count_change_internal_handle = NULL;
 
+/////////////////////// Button Config //////////////////////////
+gpio_num_t button_pin = GPIO_NUM_38;
+QueueHandle_t button_message_queue = NULL;
+TaskHandle_t button_task_handle = NULL;
+unsigned long button_time = 0;
+unsigned long last_button_time = 0;
+uint32_t button_presses = 0;
+void IRAM_ATTR button_isr()
+{
+	button_time = millis();
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	
+	if (button_time - last_button_time > 350)
+	{
+		button_presses++;
+		last_button_time = button_time;
+		xQueueSendFromISR(button_message_queue, &button_presses, &xHigherPriorityTaskWoken);
+		
+		if (xHigherPriorityTaskWoken)
+		{
+			portYIELD_FROM_ISR();
+		}
+	}
+}
+
 //////////////// LED Config ////////////////////////
 #define LED_PIN 9
 #define LED_COUNT 24
@@ -82,6 +113,76 @@ TaskHandle_t count_change_internal_handle = NULL;
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 QueueHandle_t led_state_queue_handle = NULL;
 TaskHandle_t led_task_handle = NULL;
+
+int led_order[24] = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6};
+
+//////////////// Light Sensor Config ///////////////////
+
+#define SDA_PIN 7
+#define SCL_PIN 15
+
+TaskHandle_t light_monitor_task_handle;
+
+BH1750 lightMeter;
+
+void setup_light_sensor()
+{
+	ESP_LOGI(LED_TAG, "Setting up light sensor");
+	Wire.setPins(SDA_PIN, SCL_PIN);
+	Wire.begin();
+	lightMeter.begin();
+	
+}
+
+float get_light_level()
+{
+	return lightMeter.readLightLevel();
+}
+
+int calculate_brightness_for_lux(float lux)
+{
+	if (lux < 5) // Just computer monitor brightness
+	{
+		return 10;
+	}
+	else if (lux < 30) // Just one lamp far away
+	{
+		return 15;
+	}
+	else if (lux < 500) // Just one lamp close by
+	{
+		return 30;
+	}
+	else if(lux < 3000)
+	{
+		return 50;
+	}
+	else if(lux < 10000)
+	{
+		return 80;
+	}
+	else
+	{
+		return 255;
+	}
+}
+
+int get_best_led_level()
+{
+	float val = get_light_level();
+	int setting = calculate_brightness_for_lux(val);
+	//ESP_LOGI(LED_TAG, "Measured %f lux, setting LED brightness to %d", val, setting);
+	return setting;
+}
+
+void light_monitor_task(void* arg)
+{
+	while (1)
+	{
+		strip.setBrightness(get_best_led_level());
+		vTaskDelay(pdMS_TO_TICKS(1000 * 5)); // update brightness every 5 seconds
+	}
+}
 
 uint8_t ConvertVolumeLevelToCount(uint8_t volume_level) // returns the count associated with a volume level
 {
@@ -123,10 +224,6 @@ public:
 
 	void _onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) override
 	{
-		//Serial.println("Received report");
-		//Serial.println("Report ID: " + String(report_id));
-		//Serial.println("Report Length:" + String(len));
-		
 		if (!_received_first_volume) // This is the initial volume setting
 		{
 			_volume_level = buffer[0];
@@ -137,11 +234,11 @@ public:
 		else // Volume has changed outside of this device or we're getting confirmation of a recent change origination here
 		{
 			uint8_t new_volume_level = buffer[0];
-			ESP_LOGI(HID_TAG, "Got feedback, _device_volume is %d and new volume received is %d", _volume_level, new_volume_level);
+			//ESP_LOGI(HID_TAG, "Got feedback, _device_volume is %d and new volume received is %d", _volume_level, new_volume_level);
 			
 			if (new_volume_level == _volume_level) // This is just a message confirming our recent change
 			{
-				ESP_LOGI(HID_TAG, "Received data is confirming recent change made by this device");
+				//ESP_LOGI(HID_TAG, "Received data is confirming recent change made by this device");
 			}
 			else // Volume has adjusted from outside
 			{
@@ -165,10 +262,12 @@ public:
 		if (volume == 100) // If external changes have moved it to 100 or 0 percent then the angle limit needs to be set again
 		{
 			max_angle_threshold = sensor.getSensorAngle() * (180 / PI) - detent_width / 2;
+			ESP_LOGI(MOTOR_TAG, "Volume changed from outside and is now at 100, setting CW threshold angle to %f", max_angle_threshold);
 		}
 		else if (volume == 0)
 		{
 			min_angle_threshold = sensor.getSensorAngle() * (180 / PI) + detent_width / 2;
+			ESP_LOGI(MOTOR_TAG, "Volume changed from outside and is now at 0, setting CCW threshold angle to %f", min_angle_threshold);
 		}
 		_volume_level = volume;
 	}
@@ -253,9 +352,26 @@ void count_change_internal_task(void* arg) // Receives new count value from queu
 	}
 }
 
+void button_handler_task(void* arg)
+{
+	uint32_t value;
+	while (1)
+	{
+		if (xQueueReceive(button_message_queue, &value, (TickType_t)5))
+		{
+			//xSemaphoreTake(detent_ma_semaphore, portMAX_DELAY);
+			int idx = value % (sizeof(detent_max_ma_values) / sizeof(detent_max_ma_values[0]));
+			detent_max_ma = detent_max_ma_values[idx];
+			ma_per_degree = detent_max_ma / detent_width;
+			ESP_LOGI(BUTTON_TAG, "Got button press %d, setting current to idx %d, value %f", value, index, detent_max_ma);
+			//xSemaphoreGive(detent_ma_semaphore);
+		}
+		vTaskDelay(pdMS_TO_TICKS(250));
+	}
+}
+
 void setup_motor()
 {
-	pinMode(20, OUTPUT);
 	sensor.init(); // initialise magnetic sensor hardware
 	motor.linkSensor(&sensor); // link the motor to the sensor
 
@@ -310,20 +426,15 @@ void led_control_task(void* arg) // Receives volume level in detent counts
 
 void set_strip(int fully_lit, float last_percent)
 {
-	//String msg = "Setting " + String(fully_lit) + " fully lit LEDs";
-	//Serial.println(msg);
-	//msg = "Last LED percent: " + String(last_percent, 2);
-	//Serial.println(msg);
-	
 	strip.clear();
 	for (int j = 0; j < fully_lit; j++)
 	{
-		strip.setPixelColor(j, 0, 255, 0);
+		strip.setPixelColor(led_order[j], 0, 255, 0);
 	}
 	if (last_percent > 0.001 && fully_lit < LED_COUNT) 
 	{
 		int brightness = (int)(last_percent * 255);
-		int last_led_idx = fully_lit; 
+		int last_led_idx = led_order[fully_lit]; 
 		strip.setPixelColor(last_led_idx, 0, brightness, 0);
 	}
 	strip.show();
@@ -343,11 +454,15 @@ void setup()
 {
 	Serial.begin(115200);
 	ESP_LOGI(MAIN_TAG, "Started setup");
+	
+	// Setup light sensor to set led strip
+	setup_light_sensor();
+	
 	// Set strip up first to show init sequence
 	strip.begin();
 	strip.show();
 	strip.clear();
-	strip.setBrightness(35);
+	strip.setBrightness(get_best_led_level());
 	set_strip_single_color(50, 0, 0);
 	
 	// Setup USB to begin waiting for first volume
@@ -356,8 +471,7 @@ void setup()
 	
 	// This takes a while
 	setup_motor();
-	
-	pinMode(LED_BUILTIN, OUTPUT);
+	pinMode(4, OUTPUT);
 	
 	// Wait to get volume
 	Device.block_till_first_volume();
@@ -371,16 +485,31 @@ void setup()
 	
 	count_queue_handle = xQueueCreate(5, sizeof(int));
 	led_state_queue_handle = xQueueCreate(5, sizeof(uint8_t));
+	
+	pinMode(button_pin, INPUT_PULLUP);
+	detent_ma_semaphore =  xSemaphoreCreateMutex();
+	button_message_queue = xQueueCreate(5, sizeof(uint32_t));
+	attachInterrupt(button_pin, button_isr, FALLING);
+	
+	
 	xTaskCreate(count_change_internal_task, "Count Change Internal Task", 2048, NULL, configMAX_PRIORITIES - 5, &count_change_internal_handle);
 	xTaskCreate(led_control_task, "LED control task", 2048, NULL, configMAX_PRIORITIES - 6, &led_task_handle);
+	xTaskCreate(light_monitor_task, "Light monitor task", 4096, NULL, configMAX_PRIORITIES - 10, &light_monitor_task_handle);
+	xTaskCreate(button_handler_task, "Button monitor task", 2048, NULL, configMAX_PRIORITIES - 9, &button_task_handle);
+	
+	
 	int temp_count = initial_count;
 	xQueueSend(count_queue_handle, &temp_count, (TickType_t)5);
 }
 
 void loop()
 {
-	digitalWrite(20, HIGH);
+	digitalWrite(4, HIGH);
 	motor.loopFOC();
+//	if(xSemaphoreTake(detent_ma_semaphore, (TickType_t)3) != pdTRUE)
+//	{
+//		return;
+//	}
 	
 	float angle_rad = sensor.getAngle();
 	float angle = angle_rad * (180 / PI);
@@ -404,22 +533,6 @@ void loop()
 		motor.move(spring_current);
 		return;
 	}
-	
-//	if (angle < init_angle)
-//	{
-//		float degrees_past_edge = abs(angle - init_angle);
-//		spring_current = (virtual_wall_ma_per_degree / 1000.0) * degrees_past_edge * -1;
-//		motor.move(spring_current);
-//		return;
-//	}
-//	else if (angle > max_angle)
-//	{
-//		float degrees_past_edge = abs(angle - max_angle);
-//		spring_current = (virtual_wall_ma_per_degree / 1000.0) * degrees_past_edge;
-//		motor.move(spring_current);
-//		return;
-//	}
-	
 	
 	if (angle > 0)
 	{
@@ -505,12 +618,7 @@ void loop()
 			}
 		}
 	}
-	
-//	if (i++ % 200 == 0)
-//	{
-//		Serial.println(String(spring_current) + "\t" + String(angle));
-//	}
-	
+
 	total_current = spring_current;
 	
 	if (total_current > 1.0)
@@ -519,15 +627,17 @@ void loop()
 		total_current = -1.0;
 	
 	float peak_current_threshold = (ma_per_degree / 1000.0) * (detent_width / 2) * 0.9;
+	
+	//xSemaphoreGive()
+	
 	bool at_snap_edge = abs(last_current) > peak_current_threshold && abs(total_current) > peak_current_threshold; // check that the transition that may be occuring is at the snap edge and not in the settling point between snaps
 	if (last_current > 0 && total_current < 0 && at_snap_edge) // CCW snap
 	{
-		//Serial.println(--count);
 		count--;
-		
 		if (count == 0)
-		{
+		{	
 			min_angle_threshold = angle + (detent_width/2);
+			ESP_LOGI(MOTOR_TAG, "Reached min count: %d at angle: %f, setting CCW threshold to %f", count, angle, min_angle_threshold);
 		}
 		
 		ESP_LOGI(MOTOR_TAG, "Detected decrement, count value now: %d, angle: %f",count, angle);
@@ -535,19 +645,17 @@ void loop()
 	}
 	else if(last_current < 0 && total_current > 0 && at_snap_edge) // CW snap
 	{
-		//Serial.println(++count);
 		count++;
-		
 		if (count == ConvertVolumeLevelToCount(100))
 		{
 			max_angle_threshold = angle - (detent_width/2); // at snap angle, it settles detent_width/2 further
+			ESP_LOGI(MOTOR_TAG, "Reached max count: %d at angle: %f, setting CW threshold to %f", count, angle, max_angle_threshold);
 		}
-		//ESP_LOGI(MOTOR_TAG, "Detected incrememnt, count value now: %d", count);
 		ESP_LOGI(MOTOR_TAG, "Detected increment, count value now: %d, angle: %f", count, angle);
 		xQueueSend(count_queue_handle, &count, (TickType_t)5);
 	}
 	
 	last_current = total_current;
 	motor.move(total_current);
-	digitalWrite(20, LOW);
+	digitalWrite(4, LOW);
 }
