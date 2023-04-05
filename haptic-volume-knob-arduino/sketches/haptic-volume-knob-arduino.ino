@@ -1,3 +1,33 @@
+/*
+ *  Haptic Volume Knob
+ *	MIT License
+ *	
+ *	Copyright 2023 Josh Kallus
+ *	
+ *	Permission is hereby granted, free of charge, to any person obtaining a copy
+ *	of this software and associated documentation files (the "Software"), to deal
+ *	in the Software without restriction, including without limitation the rights
+ *	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *	copies of the Software, and to permit persons to whom the Software is
+ *	furnished to do so, subject to the following conditions:
+ *
+ * 	The above copyright notice and this permission notice shall be included in all
+ *	copies or substantial portions of the Software.
+ * 
+ *	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * 	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *	SOFTWARE.
+ *	
+ *	TODO: Check initial setting and make sure its not detecting a change there
+ *	TODO: Motor rapidly moves sometimes when volume set externally reaches 100% or 0%
+ *	TODO: End of travel angle can move further in a direction when repeatedly going to EOT and backing off. Not a huge deal but should be figured out
+ */
+
+
 #include "USB.h"
 #include "USBHID.h"
 #include <SimpleFOC.h>
@@ -506,10 +536,6 @@ void loop()
 {
 	digitalWrite(4, HIGH);
 	motor.loopFOC();
-//	if(xSemaphoreTake(detent_ma_semaphore, (TickType_t)3) != pdTRUE)
-//	{
-//		return;
-//	}
 	
 	float angle_rad = sensor.getAngle();
 	float angle = angle_rad * (180 / PI);
@@ -519,14 +545,14 @@ void loop()
 	float threshold = detent_width / 2;
 	float angle_noise_threshold = 0.3;
 	
-	if (count == ConvertVolumeLevelToCount(100) && angle < max_angle_threshold)
+	if (count >= ConvertVolumeLevelToCount(100) && angle < max_angle_threshold)
 	{
 		float degrees_past_edge = abs(angle - max_angle_threshold);
 		spring_current = (virtual_wall_ma_per_degree / 1000.0) * degrees_past_edge * -1;
 		motor.move(spring_current);
 		return;
 	}
-	else if (count == 0 && angle > min_angle_threshold)
+	else if (count <= 0 && angle > min_angle_threshold)
 	{
 		float degrees_past_edge = abs(angle - min_angle_threshold);
 		spring_current = (virtual_wall_ma_per_degree / 1000.0) * degrees_past_edge;
