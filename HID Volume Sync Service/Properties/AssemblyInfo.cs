@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("hid-volume-sync-test-netframework")]
+[assembly: AssemblyTitle("HID Volume Sync Service")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("hid-volume-sync-test-netframework")]
+[assembly: AssemblyProduct("HID Volume Sync Service")]
 [assembly: AssemblyCopyright("Copyright ©  2023")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
@@ -20,7 +20,7 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("54e7718f-6d9f-4f21-a92b-733f169ef32e")]
+[assembly: Guid("cb140690-0bd0-4acb-9992-44d8f9d7aef3")]
 
 // Version information for an assembly consists of the following four values:
 //
