@@ -27,7 +27,6 @@
  *	TODO: End of travel angle can move further in a direction when repeatedly going to EOT and backing off. Not a huge deal but should be figured out
  */
 
-
 #include "USB.h"
 #include "USBHID.h"
 #include <SimpleFOC.h>
@@ -91,7 +90,6 @@ constexpr DETENTS_PER_REV detents_per_revolution = DETENTS_PER_REV::Fifty;
 constexpr float detent_width = 360.0f / (float)detents_per_revolution;
 float detent_max_ma = 500;
 float detent_max_ma_values[] = { 200, 300, 400, 500, 600, 700 };
-SemaphoreHandle_t detent_ma_semaphore = NULL;
 constexpr float virtual_wall_ma_per_degree = 350;
 float ma_per_degree = detent_max_ma / detent_width;
 
@@ -139,20 +137,16 @@ void IRAM_ATTR button_isr()
 //////////////// LED Config ////////////////////////
 #define LED_PIN 9
 #define LED_COUNT 24
-
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 QueueHandle_t led_state_queue_handle = NULL;
 TaskHandle_t led_task_handle = NULL;
-
 int led_order[24] = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6};
 
 //////////////// Light Sensor Config ///////////////////
 
 #define SDA_PIN 7
 #define SCL_PIN 15
-
 TaskHandle_t light_monitor_task_handle;
-
 BH1750 lightMeter;
 
 void setup_light_sensor()
@@ -161,7 +155,6 @@ void setup_light_sensor()
 	Wire.setPins(SDA_PIN, SCL_PIN);
 	Wire.begin();
 	lightMeter.begin();
-	
 }
 
 float get_light_level()
@@ -376,8 +369,7 @@ void count_change_internal_task(void* arg) // Receives new count value from queu
 	{
 		if (xQueueReceive(count_queue_handle, &new_count, (TickType_t)5))
 		{
-			// how to handle negative count values? Should never occur in practice
-			Device.SetVolumeLevelInternal(ConvertCountToVolumeLevel((uint8_t)new_count));
+			Device.SetVolumeLevelInternal(ConvertCountToVolumeLevel((uint8_t)new_count)); // how to handle negative count values? Should never occur in practice
 		}
 	}
 }
@@ -389,12 +381,10 @@ void button_handler_task(void* arg)
 	{
 		if (xQueueReceive(button_message_queue, &value, (TickType_t)5))
 		{
-			//xSemaphoreTake(detent_ma_semaphore, portMAX_DELAY);
 			int idx = value % (sizeof(detent_max_ma_values) / sizeof(detent_max_ma_values[0]));
 			detent_max_ma = detent_max_ma_values[idx];
 			ma_per_degree = detent_max_ma / detent_width;
 			ESP_LOGI(BUTTON_TAG, "Got button press %d, setting current to idx %d, value %f", value, index, detent_max_ma);
-			//xSemaphoreGive(detent_ma_semaphore);
 		}
 		vTaskDelay(pdMS_TO_TICKS(250));
 	}
@@ -478,7 +468,6 @@ void set_strip_single_color(uint8_t red, uint8_t green, uint8_t blue)
 	}
 	strip.show();
 }
-//////////////////////////////////////////////////////////////////////
 
 void setup()
 {
@@ -521,15 +510,12 @@ void setup()
 	button_message_queue = xQueueCreate(5, sizeof(uint32_t));
 	attachInterrupt(button_pin, button_isr, FALLING);
 	
-	
 	xTaskCreate(count_change_internal_task, "Count Change Internal Task", 2048, NULL, configMAX_PRIORITIES - 5, &count_change_internal_handle);
 	xTaskCreate(led_control_task, "LED control task", 2048, NULL, configMAX_PRIORITIES - 6, &led_task_handle);
 	xTaskCreate(light_monitor_task, "Light monitor task", 4096, NULL, configMAX_PRIORITIES - 10, &light_monitor_task_handle);
 	xTaskCreate(button_handler_task, "Button monitor task", 2048, NULL, configMAX_PRIORITIES - 9, &button_task_handle);
 	
-	
-	int temp_count = initial_count;
-	xQueueSend(count_queue_handle, &temp_count, (TickType_t)5);
+	xQueueSend(count_queue_handle, &count, (TickType_t)5);
 }
 
 void loop()
@@ -646,16 +632,12 @@ void loop()
 	}
 
 	total_current = spring_current;
-	
 	if (total_current > 1.0)
 		total_current = 1.0;
 	else if (total_current < -1.0)
 		total_current = -1.0;
 	
 	float peak_current_threshold = (ma_per_degree / 1000.0) * (detent_width / 2) * 0.9;
-	
-	//xSemaphoreGive()
-	
 	bool at_snap_edge = abs(last_current) > peak_current_threshold && abs(total_current) > peak_current_threshold; // check that the transition that may be occuring is at the snap edge and not in the settling point between snaps
 	if (last_current > 0 && total_current < 0 && at_snap_edge) // CCW snap
 	{
@@ -665,7 +647,6 @@ void loop()
 			min_angle_threshold = angle + (detent_width/2);
 			ESP_LOGI(MOTOR_TAG, "Reached min count: %d at angle: %f, setting CCW threshold to %f", count, angle, min_angle_threshold);
 		}
-		
 		ESP_LOGI(MOTOR_TAG, "Detected decrement, count value now: %d, angle: %f",count, angle);
 		xQueueSend(count_queue_handle, &count, (TickType_t)5);
 	}
