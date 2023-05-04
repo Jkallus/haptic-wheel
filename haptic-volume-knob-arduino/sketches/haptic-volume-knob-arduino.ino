@@ -73,12 +73,12 @@ static const uint8_t report_descriptor[] = { // 8 axis
 USBHID HID;
 
 ////////////////// Motor Config //////////////////
-#define A_h 17 
-#define A_l 16
-#define B_h 35
-#define B_l 36
-#define C_h 6
-#define C_l 5
+#define A_h 18
+#define A_l 8
+#define B_h 16
+#define B_l 17
+#define C_h 7
+#define C_l 15
 
 enum class DETENTS_PER_REV
 {
@@ -110,7 +110,7 @@ QueueHandle_t count_queue_handle = NULL;
 TaskHandle_t count_change_internal_handle = NULL;
 
 /////////////////////// Button Config //////////////////////////
-gpio_num_t button_pin = GPIO_NUM_38;
+gpio_num_t button_pin = GPIO_NUM_14;
 QueueHandle_t button_message_queue = NULL;
 TaskHandle_t button_task_handle = NULL;
 unsigned long button_time = 0;
@@ -144,8 +144,8 @@ int led_order[24] = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22
 
 //////////////// Light Sensor Config ///////////////////
 
-#define SDA_PIN 7
-#define SCL_PIN 15
+#define SDA_PIN 38
+#define SCL_PIN 37
 TaskHandle_t light_monitor_task_handle;
 BH1750 lightMeter;
 
@@ -154,7 +154,10 @@ void setup_light_sensor()
 	ESP_LOGI(LED_TAG, "Setting up light sensor");
 	Wire.setPins(SDA_PIN, SCL_PIN);
 	Wire.begin();
-	lightMeter.begin();
+	if (!lightMeter.begin())
+	{
+		ESP_LOGE(LED_TAG, "Light sensor failed to start");
+	}
 }
 
 float get_light_level()
@@ -194,7 +197,7 @@ int get_best_led_level()
 {
 	float val = get_light_level();
 	int setting = calculate_brightness_for_lux(val);
-	//ESP_LOGI(LED_TAG, "Measured %f lux, setting LED brightness to %d", val, setting);
+	ESP_LOGI(LED_TAG, "Measured %f lux, setting LED brightness to %d", val, setting);
 	return setting;
 }
 
@@ -203,7 +206,7 @@ void light_monitor_task(void* arg)
 	while (1)
 	{
 		strip.setBrightness(get_best_led_level());
-		vTaskDelay(pdMS_TO_TICKS(1000 * 5)); // update brightness every 5 seconds
+		vTaskDelay(pdMS_TO_TICKS(1000)); // update brightness every 5 seconds
 	}
 }
 
@@ -506,7 +509,6 @@ void setup()
 	led_state_queue_handle = xQueueCreate(5, sizeof(uint8_t));
 	
 	pinMode(button_pin, INPUT_PULLUP);
-	detent_ma_semaphore =  xSemaphoreCreateMutex();
 	button_message_queue = xQueueCreate(5, sizeof(uint32_t));
 	attachInterrupt(button_pin, button_isr, FALLING);
 	
